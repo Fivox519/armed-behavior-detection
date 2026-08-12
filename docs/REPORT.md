@@ -1,20 +1,20 @@
-# 🎯 人员持械-危险物品异常行为检测系统
-## 课题组汇报材料
+# 人员持械-危险物品异常行为检测系统
+## 项目技术报告
 
 ---
 
-## 📊 一、数据集情况与工作量汇报
+## 一、数据集情况与工作量汇报
 
 ### 阶段1：YOLO-Pose 人体与手腕定位模型
 
 | 项目 | 详情 |
 |------|------|
-| **数据来源** | COCO 2017 Keypoints 开源数据集 |
-| **训练集** | 约 57,000 张包含人体的图片 |
-| **验证集** | 5,000 张图片 |
+| **数据来源** | COCO 2017 Keypoints 开源数据集（val2017 子集） |
+| **训练集** | 2,087 张（从 COCO val2017 中筛选包含人体的图片） |
+| **验证集** | 232 张（其中 216 张有效，16 张标注格式异常） |
 | **标注特征** | 每个人体 17 个关键点 |
 | **学习重点** | 第9点（左手腕）、第10点（右手腕） |
-| **模型指标** | mAP50 = 0.921 |
+| **模型指标** | Box mAP50 = 0.875, Pose mAP50 = 0.802（2026-08-10 重新验证） |
 
 ### 阶段2：YOLO 危险品分类模型
 
@@ -23,158 +23,184 @@
 | **刀具 (Knife)** | 约 3,500 张 | Roboflow Universe 公开数据集 |
 | **斧头 (Axe)** | 约 3,000 张 | Roboflow Universe 公开数据集 |
 | **锤子 (Hammer)** | 约 3,000 张 | Roboflow Universe 公开数据集 |
-| **棍棒 (Stick/Pipe)** | 约 3,500 张 | Roboflow Universe 公开数据集 |
+| **棍棒 (Stick)** | 约 3,500 张 | Roboflow Universe 公开数据集 |
+| **钢管 (Steel Pipe)** | 扩充类别 | v10 数据集新增 |
+| **瓶子 (Bottle)** | 扩充类别 | v10 数据集新增 |
+| **玩具棍 (Toy Stick)** | 扩充类别 | v10 数据集新增 |
+| **背景 (Background)** | 扩充类别 | v10 数据集新增（空裁剪区域） |
 | **安全/负样本 (None)** | 约 3,000 张 | **人工采集合成**（空手、握拳、手机、水杯等） |
-| **总计** | **约 16,000+ 张** | $226 \times 226$ 像素手部局部图 |
-| **模型指标** | mAP50 = 0.995 | |
+| **总计** | **约 16,000+ 张** | 226 x 226 像素手部局部图 |
+| **模型指标** | Top-1 Accuracy = 0.882 (best epoch 7) | 9 类分类 |
 
 ---
 
-## ⚙️ 二、核心功能技术实现路径
+## 二、核心功能技术实现路径
 
-### 1️⃣ 如何解决空手误报？
+### 1. 如何解决空手误报？
 
-**问题**：传统 argmax 会强行在4类武器中选择一个，导致空手/日常物品被误判
+**问题**：传统 argmax 会强行在多类物品中选择一个，导致空手/日常物品被误判
 
 **实现路径**：
 - 摒弃 argmax，采用 **独立 Sigmoid 阈值判定**
-- 置信度阈值：$\ge 0.75$ 才判定为危险品
+- 置信度阈值：>= 0.75 才判定为危险品
 - 低于阈值一律归为 `none`（安全）
 
-**代码位置**：`scripts/armed_detection_v2.py` 第 55-75 行
+**代码位置**：`src/predict.py`（原 `scripts/armed_detection_v2.py`）
 
-### 2️⃣ 如何解决单帧闪烁和漏报？
+### 2. 如何解决单帧闪烁和漏报？
 
 **问题**：光照变化、动态模糊导致单帧误检/漏检，告警疯狂闪烁
 
 **实现路径**：
 - 引入 **跨帧时序状态机平滑算法**
 - 为每个追踪人员建立 **15帧滑动窗口** 历史队列
-- 告警触发条件：15帧中持械帧数占比 $\ge 60\%$（至少9帧）
+- 告警触发条件：15帧中持械帧数占比 >= 60%（至少9帧）
 
-**代码位置**：`scripts/armed_detection_v2.py` 第 140-160 行
+**代码位置**：`src/predict.py`、`scripts/demo_presentation.py`
 
-### 3️⃣ 区域规则（ROI）怎么防误报？
+### 3. 区域规则（ROI）怎么防误报？
 
 **问题**：胸部/头部作为判定点易受人体俯仰影响
 
 **实现路径**：
 - 利用 `ROIManager` 支持 **自定义多边形危险区**
 - 采用 **脚底中心点 (foot_center)** 作为判定依据
-- 判定逻辑：脚底踩入危险区 + 满足持械时序 → 触发告警
+- 判定逻辑：脚底踩入危险区 + 满足持械时序 -> 触发告警
 
-**代码位置**：`scripts/armed_detection_v2.py` 第 230-280 行
+**代码位置**：`scripts/roi_editor.py`、`scripts/demo_presentation.py`
 
-### 4️⃣ 动态裁剪窗口解决尺度问题
+### 4. 动态裁剪窗口解决尺度问题
 
-**问题**：人离镜头过近/过远时，固定226×226裁剪会导致特征退化
+**问题**：人离镜头过近/过远时，固定226x226裁剪会导致特征退化
 
 **实现路径**：
 - 动态计算裁剪尺寸：`crop_size = max(226, int(person_width * 0.4))`
-- 裁剪后统一 resize 到 226×226
+- 裁剪后统一 resize 到 226x226
 - 保证手部区域相对比例恒定
 
-**代码位置**：`scripts/armed_detection_v2.py` 第 80-115 行
+**代码位置**：`src/predict.py`
 
 ---
 
-## 🖼️ 三、汇报成果图片清单
+## 三、成果图片清单
 
 ### 训练曲线图
 
 | 文件路径 | 说明 |
 |----------|------|
-| `runs/pose/val/PosePR_curve.png` | 阶段1姿态检测 PR曲线 |
-| `runs/detect/val/BoxPR_curve.png` | 阶段2武器分类 PR曲线 |
-| `runs/pose/runs/pose/weapon_wrist_detection/results.png` | 阶段1训练结果汇总 |
-| `runs/detect/runs/detect/hand_weapon_classifier/results.png` | 阶段2训练结果汇总 |
+| `runs/pose/val-2/BoxPR_curve.png` | 阶段1姿态检测 Box PR曲线（2026-08-10 验证） |
+| `runs/pose/val-2/PosePR_curve.png` | 阶段1姿态检测 Pose PR曲线 |
+| `runs/pose/weapon_wrist_detection/results.png` | 阶段1训练结果汇总 |
+| `runs/classify/train_v5_freeze/results.png` | 阶段2分类训练结果汇总（9类，Top-1=0.882） |
 
 ### 混淆矩阵
 
 | 文件路径 | 说明 |
 |----------|------|
-| `runs/pose/val/confusion_matrix.png` | 阶段1关键点检测混淆矩阵 |
-| `runs/detect/val/confusion_matrix.png` | 阶段2武器分类混淆矩阵（**重点展示**） |
+| `runs/pose/val-2/confusion_matrix.png` | 阶段1关键点检测混淆矩阵 |
+| `runs/classify/train_v5_freeze/confusion_matrix.png` | 阶段2武器分类混淆矩阵（9类，Top-1=0.882） |
 
 ### 训练批次可视化
 
 | 文件路径 | 说明 |
 |----------|------|
-| `runs/pose/val/val_batch0_labels.jpg` | 姿态检测真实标签 |
-| `runs/pose/val/val_batch0_pred.jpg` | 姿态检测预测结果 |
-| `runs/detect/val/val_batch0_labels.jpg` | 武器分类真实标签 |
-| `runs/detect/val/val_batch0_pred.jpg` | 武器分类预测结果 |
+| `runs/pose/val-2/val_batch0_labels.jpg` | 姿态检测真实标签 |
+| `runs/pose/val-2/val_batch0_pred.jpg` | 姿态检测预测结果 |
 
 ### 鲁棒性测试结果
 
 | 文件路径 | 说明 |
 |----------|------|
-| `runs/robustness_results/analysis_results.json` | 低光照/模糊/遮挡/低分辨率测试数据 |
+| `runs/robustness_results` | 低光照/模糊/遮挡/低分辨率测试数据（JSON格式，20次测试） |
 
 ---
 
-## 📈 四、性能指标汇总
+## 四、性能指标汇总
 
 ### 模型精度
 
-| 模型 | mAP50 | mAP50-95 | 说明 |
-|------|-------|----------|------|
-| YOLO-Pose（阶段1） | 0.921 | - | 人体+手腕关键点检测 |
-| 武器分类（阶段2） | 0.995 | 0.956 | 5类分类（含none） |
+#### 阶段1: YOLOv8n-Pose (2026-08-10 重新验证)
+
+| 指标 | 值 |
+|------|------|
+| Box Precision | 0.771 |
+| Box Recall | 0.829 |
+| Box mAP50 | 0.875 |
+| Box mAP50-95 | 0.673 |
+| Pose mAP50 | 0.802 |
+| Pose mAP50-95 | 0.534 |
+| 验证图片 | 216 张 (232 总, 16 异常) |
+
+> 注：以上数据来自 2026-08-10 的独立验证运行（`runs/pose/val-2/`），与训练时 `results.csv` 中记录的训练时验证指标（Box mAP50=0.847, Pose mAP50=0.530, epoch 29 最佳）存在差异，属正常现象——训练时验证可能包含数据增强，独立验证使用干净数据。
+
+#### 阶段2: YOLOv8n-cls 武器分类
+
+| 指标 | 值 |
+|------|------|
+| Top-1 Accuracy | 0.882 (best epoch 7) |
+| Top-5 Accuracy | 1.000 |
+| 分类类别 | 9 类 (axe, bottle, hammer, knife, none, steel_pipe, stick, toy_stick, background) |
 
 ### 鲁棒性测试
 
-| 测试维度 | 通过率 | 平均FPS |
+| 测试维度 | 通过率 | 平均 FPS |
 |----------|--------|---------|
-| 低光照（亮度30%） | 100% | 19.43 |
-| 运动模糊 | 80% | 45.07 |
-| 遮挡测试 | 100% | 27.87 |
-| 低分辨率（50%） | 100% | 29.90 |
-| **总体** | **95%** | - |
+| 低光照（亮度30%） | 5/5 (100%) | 19.43 |
+| 运动模糊 | 4/5 (80%) | 45.07 |
+| 遮挡测试 | 5/5 (100%) | 27.87 |
+| 低分辨率（50%） | 5/5 (100%) | 29.90 |
+| **总体** | **19/20 (95%)** | - |
+
+> 以上数据来自 `runs/robustness_results` 实际测试记录。每维度使用 5 张测试图片（共 20 次测试），运动模糊维度有 1 次失败（test_0000 未检测到人体）。测试规模较小，仅供参考。测试环境待补充确认。
+
+### 视频推理测试 (2026-08-10, CPU i9-13900H)
+
+| 指标 | 值 |
+|------|------|
+| 测试视频 | 02_armed_action.mp4 (682 帧, 50 FPS) |
+| 测试帧数 | 150 帧 |
+| 持械检测帧 | 600 (含双手腕分别计数) |
+| 平均推理时间 | 66.1 ms/帧 |
+| 平均 FPS | 15.1 |
+| 报错 | 无 |
 
 ---
 
-## 💡 五、汇报加分发言脚本
-
-> "组长，目前我们的系统在受控场景下的双阶段管线已经完全跑通，且通过了低光照和时序平滑的鲁棒性测试。
-> 
-> 关键技术亮点包括：
-> - 采用 Sigmoid 独立阈值判定，有效过滤日常物品误报
-> - 引入15帧时序窗口平滑算法，告警极度稳定
-> - 使用脚底中心点进行ROI判定，解决人体姿态变化问题
-> 
-> 接下来的工作重点，我计划放在：
-> 1. **动态窗口裁剪优化**，解决人员离镜头过远或过近时的尺度退化问题
-> 2. 将模型导出为 TensorRT 格式，开展多路摄像头并发下的 FPS 吞吐量压测
-> 3. 进一步扩充危险物品类别库（如枪支、管制刀具等）
-> 
-> 为后续的实际项目落地做好准备。"
-
----
-
-## 📁 项目文件结构
+## 五、项目文件结构
 
 ```
 人员持械-危险物品异常行为检测/
+├── archive/                    # 历史归档
+│   └── 训练历史/               # v1~v4 训练版本
+├── configs/                    # 配置文件
+│   ├── roi_config.json
+│   └── yolo_pose_stage1.yaml
+├── datasets/                   # 数据集
+│   ├── raw/                    # 原始数据 (COCO Keypoints)
+│   └── processed/              # 处理后数据
+├── models/                     # 预训练权重
+├── portfolio/                  # 开源 Portfolio 仓库 (GitHub 发布版)
+├── presentation_package/       # 演示素材包
+├── runs/                       # 训练与验证结果
+│   ├── classify/
+│   │   ├── train_v5_freeze/    # 阶段2当前最佳模型
+│   │   └── val/ ~ val13/       # 验证结果
+│   ├── pose/
+│   │   ├── weapon_wrist_detection/  # 阶段1当前最佳模型
+│   │   ├── val/                # 早期验证
+│   │   └── val-2/              # 2026-08-10 重新验证
+│   ├── demo_results/           # 演示检测结果
+│   └── visualization/          # 可视化结果
 ├── scripts/                    # 核心代码
 │   ├── armed_detection_v2.py   # 双阶段检测核心
-│   ├── video_pipeline.py       # 多线程视频管道
-│   ├── video_detection.py      # 视频流检测
-│   ├── detection_analysis.py   # 性能分析
-│   ├── robustness_test.py      # 鲁棒性测试
-│   └── demo.py                 # 演示脚本
-├── datasets/                   # 数据集
-│   ├── raw/                    # 原始数据
-│   └── processed/              # 处理后数据
-├── runs/                       # 训练结果
-│   ├── pose/                   # 阶段1模型
-│   ├── detect/                 # 阶段2模型
-│   └── visualization/          # 可视化结果
-└── README.md                   # 项目文档
+│   ├── demo_presentation.py    # 演示脚本
+│   ├── evaluate_models.py      # 模型评估
+│   └── roi_editor.py           # ROI 编辑工具
+├── presentation_package_final_v2.zip  # 演示打包文件
+├── README.md                   # 项目文档
+└── REPORT.md                   # 本报告
 ```
 
 ---
 
-**汇报人**：[你的名字]  
-**日期**：[汇报日期]  
-**版本**：V2.0
+**版本**：V2.2（2026-08-12 修正，阶段2分类器切换为 train_v5_freeze 9类模型，数据与实际训练日志核对一致）

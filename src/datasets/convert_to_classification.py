@@ -123,7 +123,11 @@ def crop_bbox(image, x_center, y_center, width, height, expand=0.15):
 
 
 def map_class(raw_class_name, force_class=None):
-    """将原始类别名映射到标准5类"""
+    """将原始类别名映射到初始5类（axe/hammer/knife/none/stick）。
+    
+    注：最终模型(train_v5_freeze)使用9类分类，新增 bottle/steel_pipe/toy_stick/background，
+    详见 train_stage2_classifier.py 中的类别映射。
+    """
     if force_class:
         return force_class
 
